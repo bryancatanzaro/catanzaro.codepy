@@ -245,8 +245,14 @@ def compile_from_string(toolchain, name, source_string,
     if cache_dir is None:
         from os.path import exists
         from tempfile import gettempdir
-        cache_dir = join(gettempdir(),
-                "codepy-compiler-cache-v5-uid%s" % os.getuid())
+        try:
+            cache_dir = join(gettempdir(),
+                             "codepy-compiler-cache-v5-uid%s" % os.getuid())
+        except:
+            import getpass
+            username = getpass.getuser()
+            cache_dir = join(gettempdir(),
+                             "codepy-compiler-cache-v5-%s" % username)
 
         try:
             os.mkdir(cache_dir)
