@@ -407,20 +407,11 @@ class DistutilsToolchain(Toolchain):
         build_dir = os.path.dirname(source_files[0])
         os.chdir(build_dir)
         return [os.path.basename(x) for x in source_files]
-
-    def move_back(self, objects, ext_file):
-        import os
-        import os.path
-        import shutil
-        dest_path = os.path.dirname(ext_file)
-        for object in objects:
-            shutil.copyfile(object, os.path.join(dest_path, object))
                             
     def build_object(self, ext_file, source_files, debug=False):
         self.push_dir()
         source_names = self.move_to_tmp(source_files)
         objects = self.compiler.compile(source_names, extra_postargs=self.append_flags)
-        self.move_back(objects, ext_file)
         self.pop_dir()
         
     def build_extension(self, ext_file, source_files, debug=False):
@@ -530,11 +521,7 @@ def guess_distutils_toolchain():
     
     import platform
     current_os = platform.uname()
-    if 'Darwin' in current_os:
-        import sys
-        if sys.maxint == 0x7fffffff:
-            kwargs['cflags'] = ['-arch', 'i386']
-
+    
     from distutils.dist import Distribution
     dist = Distribution()
     from distutils.command.build_ext import build_ext
@@ -543,7 +530,9 @@ def guess_distutils_toolchain():
     builder.finalize_options()
 
     kwargs['include_dirs'] = builder.include_dirs
-  
+    from libraries import get_aksetup_config
+    config = get_aksetup_config()
+    kwargs['cflags'] = config.get('CXXFLAGS', [])
             
     return DistutilsToolchain(kwargs)
 

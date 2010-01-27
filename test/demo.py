@@ -9,7 +9,7 @@ mod.add_function(
             ))
 
 from codepy.toolchain import guess_toolchain
-cmod = mod.compile(guess_toolchain(), wait_on_error=True)
+cmod = mod.compile(guess_toolchain(), wait_on_error=True, debug=True)
 
 print cmod.greet()
 
