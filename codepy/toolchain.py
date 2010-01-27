@@ -339,6 +339,7 @@ class NVCCToolchain(GCCLikeToolchain):
 
 
 class DistutilsToolchain(Toolchain):
+    """Distutils toolchain for platform independent compilation"""
     def __init__(self, *args, **kwargs):
         Toolchain.__init__(self, *args, **kwargs)
         import distutils.ccompiler
@@ -358,6 +359,8 @@ class DistutilsToolchain(Toolchain):
         self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
 
     def abi_id(self):
+        """This is just a dummy id.  More thought needs to be put into what
+        the distutils abi id should look like."""
         import sys
         return sys.version_info
             
