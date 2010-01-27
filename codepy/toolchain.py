@@ -338,9 +338,101 @@ class NVCCToolchain(GCCLikeToolchain):
             raise CompileError, "module compilation failed"
 
 
+class DistutilsToolchain(Toolchain):
+    def __init__(self, *args, **kwargs):
+        Toolchain.__init__(self, *args, **kwargs)
+        import distutils.ccompiler
+        self.compiler = distutils.ccompiler.new_compiler(verbose=True)
+        import distutils.sysconfig
+        distutils.sysconfig.customize_compiler(self.compiler)
+        self.so_ext = self.compiler.shared_lib_extension
+        self.o_ext = self.compiler.obj_extension
+            
+        if hasattr(self, 'cflags'):
+            self.append_flags = self.cflags
+        else:
+            self.append_flags = []
+        for dir in self.include_dirs:
+            self.compiler.add_include_dir(dir)
+        self.SHARED_OBJECT = distutils.ccompiler.CCompiler.SHARED_OBJECT
+        self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
 
+    def abi_id(self):
+        import sys
+        return sys.version_info
+            
+    def add_library(self, feature, include_dirs, library_dirs, libraries):
+        """Add *include_dirs*, *library_dirs* and *libraries* describing the
+        library named *feature* to the toolchain.
 
+        Future toolchain invocations will include compiler flags referencing
+        the respective resources.
 
+        Duplicate directories are ignored, as will be attempts to add the same
+        *feature* twice.
+        """
+        if feature in self.features:
+            return
+
+        self.features.add(feature)
+
+        for idir in include_dirs:
+            self.compiler.add_include_dir(idir)
+
+        for ldir in library_dirs:
+            self.compiler.add_library_dir(ldir)
+
+        for library in libraries:
+            self.compiler.add_library(library)
+            
+    def get_dependencies(self, source_files):
+        """Since there is no cross-platform way to derive dependencies,
+        for now the Distutils toolchain doesn't check them.  This could lead
+        to invalid binaries if referenced header files change."""
+        return []
+
+    def push_dir(self):
+        import os
+        self.current_dir = os.getcwd()
+
+    def pop_dir(self):
+        import os
+        os.chdir(self.current_dir)
+    
+    def move_to_tmp(self, source_files):
+        import os.path
+        build_dir = os.path.dirname(source_files[0])
+        os.chdir(build_dir)
+        return [os.path.basename(x) for x in source_files]
+
+    def move_back(self, objects, ext_file):
+        import os
+        import os.path
+        import shutil
+        dest_path = os.path.dirname(ext_file)
+        for object in objects:
+            shutil.copyfile(object, os.path.join(dest_path, object))
+                            
+    def build_object(self, ext_file, source_files, debug=False):
+        self.push_dir()
+        source_names = self.move_to_tmp(source_files)
+        objects = self.compiler.compile(source_names, extra_postargs=self.append_flags)
+        self.move_back(objects, ext_file)
+        self.pop_dir()
+        
+    def build_extension(self, ext_file, source_files, debug=False):
+        self.push_dir()
+        source_names = self.move_to_tmp(source_files)
+        objects = self.compiler.compile(source_names, extra_postargs=self.append_flags)
+        object = self.compiler.link(self.SHARED_LIBRARY,
+                                    objects, ext_file,
+                                    extra_postargs=self.append_flags)
+        self.pop_dir()
+
+    def link_extension(self, ext_file, object_files, debug=False):
+        object = self.compiler.link(self.SHARED_LIBRARY,
+                                    object_files, ext_file,
+                                    extra_postargs=self.append_flags)
 
 # configuration ---------------------------------------------------------------
 class ToolchainGuessError(Exception):
@@ -426,7 +518,33 @@ def guess_toolchain():
         raise ToolchainGuessError("unknown compiler")
 
 
+def guess_distutils_toolchain():
+    """Guess and return a :class:`Toolchain` instance.
 
+    Raise :exc:`ToolchainGuessError` if no toolchain could be found.
+    """
+    kwargs = dict()
+    
+    import platform
+    current_os = platform.uname()
+    if 'Darwin' in current_os:
+        import sys
+        if sys.maxint == 0x7fffffff:
+            kwargs['cflags'] = ['-arch', 'i386']
+
+    from distutils.dist import Distribution
+    dist = Distribution()
+    from distutils.command.build_ext import build_ext
+    builder = build_ext(dist)
+    builder.initialize_options()
+    builder.finalize_options()
+
+    kwargs['include_dirs'] = builder.include_dirs
+  
+            
+    return DistutilsToolchain(kwargs)
+
+    
 
 def guess_nvcc_toolchain():
     gcc_kwargs = _guess_toolchain_kwargs_from_python_config()
