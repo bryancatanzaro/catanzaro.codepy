@@ -5,7 +5,7 @@ from __future__ import division
 __copyright__ = "Copyright (C) 2008,9 Andreas Kloeckner, Bryan Catanzaro"
 
 from codepy import CompileError
-from pytools import Record
+from pytools import Record, memoize
 
 
 
@@ -343,7 +343,7 @@ class DistutilsToolchain(Toolchain):
     def __init__(self, *args, **kwargs):
         Toolchain.__init__(self, *args, **kwargs)
         import distutils.ccompiler
-        self.compiler = distutils.ccompiler.new_compiler(verbose=True)
+        self.compiler = distutils.ccompiler.new_compiler()
         import distutils.sysconfig
         distutils.sysconfig.customize_compiler(self.compiler)
         self.so_ext = self.compiler.shared_lib_extension
@@ -373,8 +373,7 @@ class DistutilsToolchain(Toolchain):
         Future toolchain invocations will include compiler flags referencing
         the respective resources.
 
-        Duplicate directories are ignored, as will be attempts to add the same
-        *feature* twice.
+        Attempts to add the same *feature* twice are ignored.
         """
         if feature in self.features:
             return
@@ -434,6 +433,7 @@ class DistutilsToolchain(Toolchain):
 class ToolchainGuessError(Exception):
     pass
 
+@memoize
 def _guess_toolchain_kwargs_from_python_config():
     def strip_prefix(pfx, value):
         if value.startswith(pfx):
@@ -482,7 +482,33 @@ def _guess_toolchain_kwargs_from_python_config():
             undefines=undefines,
             )
 
+@memoize
+def _guess_toolchain_kwargs_from_distutils_aksetup():
+    kwargs = dict()
+    
+    from distutils.dist import Distribution
+    dist = Distribution()
+    from distutils.command.build_ext import build_ext
+    builder = build_ext(dist)
+    builder.initialize_options()
+    builder.finalize_options()
 
+    kwargs['include_dirs'] = builder.include_dirs
+    kwargs['library_dirs'] = builder.library_dirs
+    from libraries import get_aksetup_config
+    config = get_aksetup_config()
+    kwargs['cflags'] = config.get('CXXFLAGS', [])
+
+    import distutils.ccompiler
+    compiler = distutils.ccompiler.new_compiler()
+    import distutils.sysconfig
+    distutils.sysconfig.customize_compiler(compiler)
+    kwargs['so_ext'] = compiler.shared_lib_extension
+    kwargs['o_ext'] = compiler.obj_extension
+    kwargs['libraries'] = []
+    kwargs['defines'] = []
+    kwargs['undefines'] = []
+    return kwargs
 
 
 def guess_toolchain():
@@ -490,8 +516,13 @@ def guess_toolchain():
 
     Raise :exc:`ToolchainGuessError` if no toolchain could be found.
     """
-    kwargs = _guess_toolchain_kwargs_from_python_config()
-
+    try:
+        #This will fail on non-POSIX systems
+        kwargs = _guess_toolchain_kwargs_from_python_config()
+    except:
+        #If it does, return a distutils toolchain
+        return guess_distutils_toolchain()
+    
     from pytools.prefork import call_capture_output
     result, version, stderr = call_capture_output([kwargs["cc"], "--version"])
     if result != 0:
@@ -519,44 +550,31 @@ def guess_distutils_toolchain():
 
     Raise :exc:`ToolchainGuessError` if no toolchain could be found.
     """
-    kwargs = dict()
-    
-    import platform
-    current_os = platform.uname()
-    
-    from distutils.dist import Distribution
-    dist = Distribution()
-    from distutils.command.build_ext import build_ext
-    builder = build_ext(dist)
-    builder.initialize_options()
-    builder.finalize_options()
-
-    kwargs['include_dirs'] = builder.include_dirs
-    kwargs['library_dirs'] = builder.library_dirs
-    from libraries import get_aksetup_config
-    config = get_aksetup_config()
-    kwargs['cflags'] = config.get('CXXFLAGS', [])
+    kwargs =  _guess_toolchain_kwargs_from_distutils_aksetup()
             
     return DistutilsToolchain(kwargs)
 
     
 
 def guess_nvcc_toolchain():
-    gcc_kwargs = _guess_toolchain_kwargs_from_python_config()
+    try:
+        #This will fail on non-POSIX systems
+        host_kwargs = _guess_toolchain_kwargs_from_python_config()
+    except:
+        host_kwargs = _guess_toolchain_kwargs_from_distutils_aksetup()
 
     kwargs = dict(
-            cc="nvcc",
-            ldflags=[],
-            libraries=gcc_kwargs["libraries"],
-            cflags=["-Xcompiler", ",".join(gcc_kwargs["cflags"])],
-            include_dirs=gcc_kwargs["include_dirs"],
-            library_dirs=gcc_kwargs["library_dirs"],
-            so_ext=gcc_kwargs["so_ext"],
-            o_ext=gcc_kwargs["o_ext"],
-            defines=gcc_kwargs["defines"],
-            undefines=gcc_kwargs["undefines"],
-            )
+        cc="nvcc",
+        ldflags=[],
+        libraries=host_kwargs["libraries"],
+        cflags=["-Xcompiler", ",".join(host_kwargs["cflags"])],
+        include_dirs=host_kwargs["include_dirs"],
+        library_dirs=host_kwargs["library_dirs"],
+        so_ext=host_kwargs["so_ext"],
+        o_ext=host_kwargs["o_ext"],
+        defines=host_kwargs["defines"],
+        undefines=host_kwargs["undefines"],
+        )
     kwargs.setdefault("undefines", []).append("__BLOCKS__")
-    kwargs["cc"] = "nvcc"
 
     return NVCCToolchain(**kwargs)
