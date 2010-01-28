@@ -355,6 +355,8 @@ class DistutilsToolchain(Toolchain):
             self.append_flags = []
         for dir in self.include_dirs:
             self.compiler.add_include_dir(dir)
+        for dir in self.library_dirs:
+            self.compiler.add_library_dir(dir)
         self.SHARED_OBJECT = distutils.ccompiler.CCompiler.SHARED_OBJECT
         self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
 
@@ -530,6 +532,7 @@ def guess_distutils_toolchain():
     builder.finalize_options()
 
     kwargs['include_dirs'] = builder.include_dirs
+    kwargs['library_dirs'] = builder.library_dirs
     from libraries import get_aksetup_config
     config = get_aksetup_config()
     kwargs['cflags'] = config.get('CXXFLAGS', [])
