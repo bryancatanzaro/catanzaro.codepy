@@ -349,10 +349,12 @@ class DistutilsToolchain(Toolchain):
         self.so_ext = self.compiler.shared_lib_extension
         self.o_ext = self.compiler.obj_extension
             
-        if hasattr(self, 'cflags'):
-            self.append_flags = self.cflags
-        else:
-            self.append_flags = []
+        if not hasattr(self, 'cflags'):
+            self.cflags = []
+        if not hasattr(self, 'ldflags'):
+            self.ldflags = []
+            
+            
         for dir in self.include_dirs:
             self.compiler.add_include_dir(dir)
         for dir in self.library_dirs:
@@ -412,22 +414,22 @@ class DistutilsToolchain(Toolchain):
     def build_object(self, ext_file, source_files, debug=False):
         self.push_dir()
         source_names = self.move_to_tmp(source_files)
-        objects = self.compiler.compile(source_names, extra_postargs=self.append_flags)
+        objects = self.compiler.compile(source_names, extra_postargs=self.cflags)
         self.pop_dir()
         
     def build_extension(self, ext_file, source_files, debug=False):
         self.push_dir()
         source_names = self.move_to_tmp(source_files)
-        objects = self.compiler.compile(source_names, extra_postargs=self.append_flags)
+        objects = self.compiler.compile(source_names, extra_postargs=self.cflags)
         object = self.compiler.link(self.SHARED_LIBRARY,
                                     objects, ext_file,
-                                    extra_postargs=self.append_flags)
+                                    extra_postargs=self.ldflags)
         self.pop_dir()
 
     def link_extension(self, ext_file, object_files, debug=False):
         object = self.compiler.link(self.SHARED_LIBRARY,
                                     object_files, ext_file,
-                                    extra_postargs=self.append_flags)
+                                    extra_postargs=self.ldflags)
 
 # configuration ---------------------------------------------------------------
 class ToolchainGuessError(Exception):
@@ -498,7 +500,7 @@ def _guess_toolchain_kwargs_from_distutils_aksetup():
     from libraries import get_aksetup_config
     config = get_aksetup_config()
     kwargs['cflags'] = config.get('CXXFLAGS', [])
-
+    kwargs['ldflags'] = config.get('LDFLAGS', [])
     import distutils.ccompiler
     compiler = distutils.ccompiler.new_compiler()
     import distutils.sysconfig
