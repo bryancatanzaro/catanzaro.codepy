@@ -6,7 +6,7 @@ __copyright__ = "Copyright (C) 2008,9 Andreas Kloeckner, Bryan Catanzaro"
 
 from codepy import CompileError
 from pytools import Record, memoize
-
+import distutils
 
 
 
@@ -343,25 +343,34 @@ class DistutilsToolchain(Toolchain):
     def __init__(self, *args, **kwargs):
         Toolchain.__init__(self, *args, **kwargs)
         import distutils.ccompiler
-        self.compiler = distutils.ccompiler.new_compiler()
-        import distutils.sysconfig
-        distutils.sysconfig.customize_compiler(self.compiler)
-        self.so_ext = self.compiler.shared_lib_extension
-        self.o_ext = self.compiler.obj_extension
-            
+        if 'compiler' in kwargs:
+            self.compiler = kwargs['compiler']
+        else:
+            self.compiler = distutils.ccompiler.new_compiler()
+            import distutils.sysconfig
+            distutils.sysconfig.customize_compiler(self.compiler)
+            for dir in self.include_dirs:
+                self.compiler.add_include_dir(dir)
+            for dir in self.library_dirs:
+                self.compiler.add_library_dir(dir)
+        if not hasattr(self, 'so_ext'):
+            self.so_ext = self.compiler.shared_lib_extension
+        if not hasattr(self, 'o_ext'):
+            self.o_ext = self.compiler.obj_extension
         if not hasattr(self, 'cflags'):
             self.cflags = []
         if not hasattr(self, 'ldflags'):
             self.ldflags = []
-            
-            
-        for dir in self.include_dirs:
-            self.compiler.add_include_dir(dir)
-        for dir in self.library_dirs:
-            self.compiler.add_library_dir(dir)
-        self.SHARED_OBJECT = distutils.ccompiler.CCompiler.SHARED_OBJECT
-        self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
+        if not hasattr(self, 'SHARED_OBJECT'):
+            self.SHARED_OBJECT = distutils.ccompiler.CCompiler.SHARED_OBJECT
+        if not hasattr(self, 'SHARED_LIBRARY'):
+            self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
 
+    def copy(self, **kwargs):
+        import copy
+        compiler = copy.deepcopy(self.compiler)
+        return Toolchain.copy(self, compiler=compiler)
+        
     def abi_id(self):
         """This is just a dummy id.  More thought needs to be put into what
         the distutils abi id should look like."""
@@ -487,23 +496,22 @@ def _guess_toolchain_kwargs_from_python_config():
 @memoize
 def _guess_toolchain_kwargs_from_distutils_aksetup():
     kwargs = dict()
-    
-    from distutils.dist import Distribution
-    dist = Distribution()
-    from distutils.command.build_ext import build_ext
-    builder = build_ext(dist)
+    import distutils.dist
+    import distutils.command.build_ext
+    import distutils.ccompiler
+    import distutils.sysconfig
+    dist = distutils.dist.Distribution()
+    builder = distutils.command.build_ext.build_ext(dist)
     builder.initialize_options()
     builder.finalize_options()
 
     kwargs['include_dirs'] = builder.include_dirs
     kwargs['library_dirs'] = builder.library_dirs
-    from libraries import get_aksetup_config
-    config = get_aksetup_config()
+    import codepy.libraries
+    config = codepy.libraries.get_aksetup_config()
     kwargs['cflags'] = config.get('CXXFLAGS', [])
     kwargs['ldflags'] = config.get('LDFLAGS', [])
-    import distutils.ccompiler
     compiler = distutils.ccompiler.new_compiler()
-    import distutils.sysconfig
     distutils.sysconfig.customize_compiler(compiler)
     kwargs['so_ext'] = compiler.shared_lib_extension
     kwargs['o_ext'] = compiler.obj_extension
