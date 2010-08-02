@@ -713,30 +713,15 @@ class Module(Block):
                 yield line
 
 class PrivateNamespace(Block):
-    def get_namespace_name(self):
-        try:
-            import hashlib
-            checksum = hashlib.md5()
-        except ImportError:
-            # for Python << 2.5
-            import md5
-            checksum = md5.new()
-
-        for c in self.contents:
-            for line in c.generate():
-                checksum.update(line)
-
-        return "private_namespace_"+checksum.hexdigest()
-
     def generate(self):
-        yield "namespace "+self.get_namespace_name()
+        yield "namespace "
         yield "{"
         for item in self.contents:
             for item_line in item.generate():
                 yield "  " + item_line
         yield "}"
         yield ""
-        yield "using namespace %s;" % self.get_namespace_name()
+       
 
 def _test():
     s = Struct("yuck", [
