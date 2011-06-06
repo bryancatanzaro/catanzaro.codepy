@@ -8,8 +8,8 @@ mod.add_function(
             Block([Statement('return "hello world"')])
             ))
 
-from codepy.toolchain import guess_toolchain
-cmod = mod.compile(guess_toolchain(), wait_on_error=True, debug=True)
+from codepy.toolchain import guess_distutils_toolchain
+cmod = mod.compile(guess_distutils_toolchain())
 
 print cmod.greet()
 

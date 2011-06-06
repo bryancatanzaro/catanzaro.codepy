@@ -5,8 +5,8 @@ from __future__ import division
 __copyright__ = "Copyright (C) 2008,9 Andreas Kloeckner, Bryan Catanzaro"
 
 from codepy import CompileError
-from pytools import Record
-
+from pytools import Record, memoize
+import distutils
 
 
 
@@ -126,7 +126,7 @@ class GCCLikeToolchain(Toolchain):
         from pytools.prefork import call_capture_output
         result, stdout, stderr = call_capture_output([self.cc, "--version"])
         if result != 0:
-            raise RuntimeError("version query failed: "+stderrr)
+            raise RuntimeError("version query failed: "+stderr)
         return stdout
 
     def enable_debugging(self):
@@ -336,14 +336,113 @@ class NVCCToolchain(GCCLikeToolchain):
             raise CompileError, "module compilation failed"
 
 
+class DistutilsToolchain(Toolchain):
+    """Distutils toolchain for platform independent compilation"""
+    def __init__(self, *args, **kwargs):
+        Toolchain.__init__(self, *args, **kwargs)
+        import distutils.ccompiler
+        if 'compiler' in kwargs:
+            self.compiler = kwargs['compiler']
+        else:
+            self.compiler = distutils.ccompiler.new_compiler()
+            import distutils.sysconfig
+            distutils.sysconfig.customize_compiler(self.compiler)
+            for dir in self.include_dirs:
+                self.compiler.add_include_dir(dir)
+            for dir in self.library_dirs:
+                self.compiler.add_library_dir(dir)
+        if not hasattr(self, 'so_ext'):
+            self.so_ext = self.compiler.shared_lib_extension
+        if not hasattr(self, 'o_ext'):
+            self.o_ext = self.compiler.obj_extension
+        if not hasattr(self, 'cflags'):
+            self.cflags = []
+        if not hasattr(self, 'ldflags'):
+            self.ldflags = []
+        if not hasattr(self, 'SHARED_OBJECT'):
+            self.SHARED_OBJECT = distutils.ccompiler.CCompiler.SHARED_OBJECT
+        if not hasattr(self, 'SHARED_LIBRARY'):
+            self.SHARED_LIBRARY = distutils.ccompiler.CCompiler.SHARED_LIBRARY
 
+    def copy(self, **kwargs):
+        import copy
+        compiler = copy.deepcopy(self.compiler)
+        return Toolchain.copy(self, compiler=compiler)
+        
+    def abi_id(self):
+        """This is just a dummy id.  More thought needs to be put into what
+        the distutils abi id should look like."""
+        import sys
+        return sys.version_info
+            
+    def add_library(self, feature, include_dirs, library_dirs, libraries):
+        """Add *include_dirs*, *library_dirs* and *libraries* describing the
+        library named *feature* to the toolchain.
 
+        Future toolchain invocations will include compiler flags referencing
+        the respective resources.
 
+        Attempts to add the same *feature* twice are ignored.
+        """
+        if feature in self.features:
+            return
+
+        self.features.add(feature)
+
+        for idir in include_dirs:
+            self.compiler.add_include_dir(idir)
+
+        for ldir in library_dirs:
+            self.compiler.add_library_dir(ldir)
+
+        for library in libraries:
+            self.compiler.add_library(library)
+            
+    def get_dependencies(self, source_files):
+        """Since there is no cross-platform way to derive dependencies,
+        for now the Distutils toolchain doesn't check them.  This could lead
+        to invalid binaries if referenced header files change."""
+        return []
+
+    def push_dir(self):
+        import os
+        self.current_dir = os.getcwd()
+
+    def pop_dir(self):
+        import os
+        os.chdir(self.current_dir)
+    
+    def move_to_tmp(self, source_files):
+        import os.path
+        build_dir = os.path.dirname(source_files[0])
+        os.chdir(build_dir)
+        return [os.path.basename(x) for x in source_files]
+                            
+    def build_object(self, ext_file, source_files, debug=False):
+        self.push_dir()
+        source_names = self.move_to_tmp(source_files)
+        objects = self.compiler.compile(source_names, extra_postargs=self.cflags)
+        self.pop_dir()
+        
+    def build_extension(self, ext_file, source_files, debug=False):
+        self.push_dir()
+        source_names = self.move_to_tmp(source_files)
+        objects = self.compiler.compile(source_names, extra_postargs=self.cflags)
+        object = self.compiler.link(self.SHARED_LIBRARY,
+                                    objects, ext_file,
+                                    extra_postargs=self.ldflags)
+        self.pop_dir()
+
+    def link_extension(self, ext_file, object_files, debug=False):
+        object = self.compiler.link(self.SHARED_LIBRARY,
+                                    object_files, ext_file,
+                                    extra_postargs=self.ldflags)
 
 # configuration ---------------------------------------------------------------
 class ToolchainGuessError(Exception):
     pass
 
+@memoize
 def _guess_toolchain_kwargs_from_python_config():
     def strip_prefix(pfx, value):
         if value.startswith(pfx):
@@ -392,7 +491,32 @@ def _guess_toolchain_kwargs_from_python_config():
             undefines=undefines,
             )
 
+@memoize
+def _guess_toolchain_kwargs_from_distutils_aksetup():
+    kwargs = dict()
+    import distutils.dist
+    import distutils.command.build_ext
+    import distutils.ccompiler
+    import distutils.sysconfig
+    dist = distutils.dist.Distribution()
+    builder = distutils.command.build_ext.build_ext(dist)
+    builder.initialize_options()
+    builder.finalize_options()
 
+    kwargs['include_dirs'] = builder.include_dirs
+    kwargs['library_dirs'] = builder.library_dirs
+    import codepy.libraries
+    config = codepy.libraries.get_aksetup_config()
+    kwargs['cflags'] = config.get('CXXFLAGS', [])
+    kwargs['ldflags'] = config.get('LDFLAGS', [])
+    compiler = distutils.ccompiler.new_compiler()
+    distutils.sysconfig.customize_compiler(compiler)
+    kwargs['so_ext'] = compiler.shared_lib_extension
+    kwargs['o_ext'] = compiler.obj_extension
+    kwargs['libraries'] = []
+    kwargs['defines'] = []
+    kwargs['undefines'] = []
+    return kwargs
 
 
 def guess_toolchain():
@@ -400,8 +524,13 @@ def guess_toolchain():
 
     Raise :exc:`ToolchainGuessError` if no toolchain could be found.
     """
-    kwargs = _guess_toolchain_kwargs_from_python_config()
-
+    try:
+        #This will fail on non-POSIX systems
+        kwargs = _guess_toolchain_kwargs_from_python_config()
+    except:
+        #If it does, return a distutils toolchain
+        return guess_distutils_toolchain()
+    
     from pytools.prefork import call_capture_output
     result, version, stderr = call_capture_output([kwargs["cc"], "--version"])
     if result != 0:
@@ -424,24 +553,36 @@ def guess_toolchain():
         raise ToolchainGuessError("unknown compiler")
 
 
+def guess_distutils_toolchain():
+    """Guess and return a :class:`Toolchain` instance.
 
+    Raise :exc:`ToolchainGuessError` if no toolchain could be found.
+    """
+    kwargs =  _guess_toolchain_kwargs_from_distutils_aksetup()
+            
+    return DistutilsToolchain(kwargs)
+
+    
 
 def guess_nvcc_toolchain():
-    gcc_kwargs = _guess_toolchain_kwargs_from_python_config()
+    try:
+        #This will fail on non-POSIX systems
+        host_kwargs = _guess_toolchain_kwargs_from_python_config()
+    except:
+        host_kwargs = _guess_toolchain_kwargs_from_distutils_aksetup()
 
     kwargs = dict(
-            cc="nvcc",
-            ldflags=[],
-            libraries=gcc_kwargs["libraries"],
-            cflags=["-Xcompiler", ",".join(gcc_kwargs["cflags"])],
-            include_dirs=gcc_kwargs["include_dirs"],
-            library_dirs=gcc_kwargs["library_dirs"],
-            so_ext=gcc_kwargs["so_ext"],
-            o_ext=gcc_kwargs["o_ext"],
-            defines=gcc_kwargs["defines"],
-            undefines=gcc_kwargs["undefines"],
-            )
+        cc="nvcc",
+        ldflags=[],
+        libraries=host_kwargs["libraries"],
+        cflags=["-Xcompiler", ",".join(host_kwargs["cflags"])],
+        include_dirs=host_kwargs["include_dirs"],
+        library_dirs=host_kwargs["library_dirs"],
+        so_ext=host_kwargs["so_ext"],
+        o_ext=host_kwargs["o_ext"],
+        defines=host_kwargs["defines"],
+        undefines=host_kwargs["undefines"],
+        )
     kwargs.setdefault("undefines", []).append("__BLOCKS__")
-    kwargs["cc"] = "nvcc"
 
     return NVCCToolchain(**kwargs)
